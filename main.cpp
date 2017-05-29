@@ -3,6 +3,10 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <time.h>
+#include <chrono>
+#include <unordered_map>
+
 
 #define N 1024
 #define Q 2600
@@ -51,7 +55,7 @@ int main(int argc, char** argv) {
 	cout << "Entropia del segnale quantizzato: " << entropia << "\n";
 
 	/*Creo un MDCTTransformer che prende in input finestre da N valori e produce N/2 coefficienti*/
-	MDCTTransformer<double, int16_t> mdct(N / 2);
+	MDCTTransformer mdct(N / 2);
 	cout << "I dati originali sono " << rawData.size() << "campioni\n";
 	
 	/*Aggiungo tanti 0 alla fine per far diventare la dimensione multipla di N*/
