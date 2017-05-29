@@ -33,15 +33,15 @@ int main(int argc, char** argv) {
 	ofstream outFile("output.raw", ios::binary);
 	ofstream outError("error.raw", ios::binary);
 	int16_t sample, quantizedSample, dequantizedSample, diff;
-	int32_t cont=0;
+	int32_t cont = 0, WindowWidth = N, timeQuantizationFactor = Q, frequencyQuantizationFactor = Q2;
 	freq<uint16_t> map1, map2, map3, map4;
 	/*Scorro il file di input e tengo traccia delle occorrenze, quantizzo e dequantizzo calcolando le differenze*/
 	while (inputFile.read(reinterpret_cast<char*>(&sample), 2)) {
 		cont++;
 		map1(sample);
-		quantizedSample = quantize(sample, Q);
+		quantizedSample = quantize(sample, timeQuantizationFactor);
 		map2(quantizedSample);
-		dequantizedSample = dequantize(quantizedSample, Q);
+		dequantizedSample = dequantize(quantizedSample, timeQuantizationFactor);
 		dequantizedFile.write(reinterpret_cast<char*>(&dequantizedSample), 2);
 		diff = sample - quantizedSample;
 		errorFile.write(reinterpret_cast<char*>(&diff), 2);
@@ -55,15 +55,15 @@ int main(int argc, char** argv) {
 	cout << "Entropia del segnale quantizzato: " << entropia << "\n";
 
 	/*Creo un MDCTTransformer che prende in input finestre da N valori e produce N/2 coefficienti*/
-	MDCTTransformer mdct(N / 2);
+	MDCTTransformer mdct(WindowWidth / 2);
 	cout << "I dati originali sono " << rawData.size() << "campioni\n";
 	
-	/*Aggiungo tanti 0 alla fine per far diventare la dimensione multipla di N*/
-	cont = N - (rawData.size() % N);
+	/*Aggiungo tanti 0 alla fine per far diventare la dimensione multipla di WindowWidth*/
+	cont = WindowWidth - (rawData.size() % WindowWidth);
 	while (cont-- > 0) rawData.push_back(0);
 
 	/*Aggiungo un padding di 0 all'inizio e alla fine*/
-	vector<int16_t> vec2(N, 0);
+	vector<int16_t> vec2(WindowWidth, 0);
 	rawData.insert(rawData.begin(), vec2.begin(), vec2.end());
 	rawData.insert(rawData.end(), vec2.begin(), vec2.end());
 	cout << "I dati originali sono portati a " << rawData.size() << "campioni\n";
@@ -71,27 +71,27 @@ int main(int argc, char** argv) {
 	/*Scorro i dati e ne eseguo la trasformata MDCT a finestra di  ampiezza N*/
 	/*
 		Calcolo il numero di finestre Nwindows
-		L'inizio della finestra si sposta di N/2 ogni volta a causa della sovrapposizione del 50%
-		La finestra window prende i seguenti N valori
+		L'inizio della finestra si sposta di WindowWidth/2 ogni volta a causa della sovrapposizione del 50%
+		La finestra window prende i seguenti WindowWidth valori
 		Chiamo l'operatore transform su window
 	*/
-	vector<vector<double>> transformedWindows(ceil(rawData.size() / N) * 2 - 1);
-	for(uint32_t Nwindows = 0; Nwindows < ceil(rawData.size() / N) * 2 - 1; Nwindows++){
-		auto windowBegin = rawData.begin() + Nwindows * N / 2;
-		auto windowEnd = windowBegin + N;
+	vector<vector<double>> transformedWindows(ceil(rawData.size() / WindowWidth) * 2 - 1);
+	for(uint32_t Nwindows = 0; Nwindows < ceil(rawData.size() / WindowWidth) * 2 - 1; Nwindows++){
+		auto windowBegin = rawData.begin() + Nwindows * WindowWidth / 2;
+		auto windowEnd = windowBegin + WindowWidth;
 		mdct.transform(windowBegin, windowEnd, transformedWindows[Nwindows]);
 	}
 	cout << "I coefficienti trasformati sono " << transformedWindows.size() << " vettori da " << transformedWindows[0].size() << " elementi\n";
 
 	/*Scorro tutti i coefficienti di tutte le finestre e li quantizzo, misurando l'entropia e l'errore commesso*/
-	vector<vector<int16_t>> antiTransformedWindows(ceil(rawData.size() / N) * 2 - 1);
+	vector<vector<int16_t>> antiTransformedWindows(ceil(rawData.size() / WindowWidth) * 2 - 1);
 	uint32_t windowsCount = 0;
 	for (vector<double>& window : transformedWindows) {
 		for (auto& coeff : window) {
 			map3(coeff);
-			double quantizedCoeff = quantize(coeff, Q2);
+			double quantizedCoeff = quantize(coeff, frequencyQuantizationFactor);
 			map4(quantizedCoeff);
-			double dequantizedCoeff = dequantize(quantizedCoeff, Q2);
+			double dequantizedCoeff = dequantize(quantizedCoeff, frequencyQuantizationFactor);
 			coeff = dequantizedCoeff;
 		}
 		mdct.antiTransform(window.begin(), window.end(), antiTransformedWindows[windowsCount]);
@@ -109,9 +109,9 @@ int main(int argc, char** argv) {
 	cout << "Il vettore di output è lungo " << outSignal.size()<<"\n";
 	windowsCount = 0;
 	for(vector<int16_t>& window : antiTransformedWindows) {
-		uint32_t n = windowsCount * (N / 2);
+		uint32_t n = windowsCount * (WindowWidth / 2);
 		cont = 0;
-		while (n < (windowsCount * N / 2 + window.size())) {
+		while (n < (windowsCount * WindowWidth / 2 + window.size())) {
 			outSignal[n++] += window[cont++];
 		}
 		windowsCount++;
