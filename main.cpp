@@ -1,5 +1,5 @@
 #include "mdct.h"
-#include "raw.h"
+#include "freq.h"
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -7,48 +7,22 @@
 #include <chrono>
 #include <unordered_map>
 
-#define MAXDATA 200000
+
 #define N 1024
 #define Q 2600
 #define Q2 10000
 
-template <typename T>
-struct freq {
-	std::unordered_map<T, uint32_t> histo;
-
-	void operator()(const T& val) {
-		++histo[val];
-	}
-
-	double sum() const {
-		double s = 0.;
-		for (const auto& x : histo)
-			s += x.second;
-		return s;
-	}
-
-	double entropy1() const {
-		double s = sum();
-		double h = 0;
-		for (const auto& x : histo) {
-			double px = x.second / s;
-			h += px * log2(px);
-		}
-
-		return -h;
-	}
-
-	double entropy2() const {
-		double s = 0, h = 0;
-		for (const auto& x : histo) {
-			s += x.second;
-			h += x.second * log2(x.second);
-		}
-		return log2(s) - h / s;
-	}
-};
-
 using namespace std;
+
+template <typename T>
+T quantize(const T& element, double qFactor) {
+	return T(lround(element / qFactor));
+}
+
+template <typename T>
+T dequantize(const T& element, double dqFactor) {
+	return T(lround(element * dqFactor));
+}
 
 int main(int argc, char** argv) {
 
@@ -58,22 +32,22 @@ int main(int argc, char** argv) {
 	ofstream errorFile("error_qt.raw", ios::binary);
 	ofstream outFile("output.raw", ios::binary);
 	ofstream outError("error.raw", ios::binary);
-	int16_t sample, quantizedSample, diff;
+	int16_t sample, quantizedSample, dequantizedSample, diff;
 	int32_t cont=0;
-	freq<uint16_t> map1, map2, map3, map4, map5;
+	freq<uint16_t> map1, map2, map3, map4;
 	/*Scorro il file di input e tengo traccia delle occorrenze, quantizzo e dequantizzo calcolando le differenze*/
 	while (inputFile.read(reinterpret_cast<char*>(&sample), 2)) {
 		cont++;
 		map1(sample);
-		quantizedSample = sample / Q;
+		quantizedSample = quantize(sample, Q);
 		map2(quantizedSample);
-		quantizedSample *= Q;
-		dequantizedFile.write(reinterpret_cast<char*>(&quantizedSample), 2);
+		dequantizedSample = dequantize(quantizedSample, Q);
+		dequantizedFile.write(reinterpret_cast<char*>(&dequantizedSample), 2);
 		diff = sample - quantizedSample;
 		errorFile.write(reinterpret_cast<char*>(&diff), 2);
-		//if(cont < MAXDATA)	
-			rawData.push_back(sample);
+		rawData.push_back(sample);
 	}
+	
 	/*Calcolo le entropie di segnale originale e quantizzato nel tempo*/
 	double entropia = map1.entropy2();
 	cout << "Entropia del segnale originale: " << entropia << "\n";
@@ -82,7 +56,6 @@ int main(int argc, char** argv) {
 
 	/*Creo un MDCTTransformer che prende in input finestre da N valori e produce N/2 coefficienti*/
 	MDCTTransformer mdct(N / 2);
-	//const vector<double>& wn = mdct.attenuationWindow();
 	cout << "I dati originali sono " << rawData.size() << "campioni\n";
 	
 	/*Aggiungo tanti 0 alla fine per far diventare la dimensione multipla di N*/
@@ -105,11 +78,8 @@ int main(int argc, char** argv) {
 	vector<vector<double>> transformedWindows(ceil(rawData.size() / N) * 2 - 1);
 	for(uint32_t Nwindows = 0; Nwindows < ceil(rawData.size() / N) * 2 - 1; Nwindows++){
 		auto windowBegin = rawData.begin() + Nwindows * N / 2;
-		vector<double> window(windowBegin, windowBegin + N);
-		transformedWindows[Nwindows] = mdct.transform(window);
-		vector<int16_t> antitrasformata;
-		mdct.antiTransform(transformedWindows[Nwindows], antitrasformata);
-		//mdct.transform(window, transformedWindows[Nwindows]);
+		auto windowEnd = windowBegin + N;
+		mdct.transform(windowBegin, windowEnd, transformedWindows[Nwindows]);
 	}
 	cout << "I coefficienti trasformati sono " << transformedWindows.size() << " vettori da " << transformedWindows[0].size() << " elementi\n";
 
@@ -118,21 +88,19 @@ int main(int argc, char** argv) {
 	uint32_t windowsCount = 0;
 	for (vector<double>& window : transformedWindows) {
 		for (auto& coeff : window) {
-			//map3(coeff);
-			double quantizedCoeff = lround(coeff / Q2);
+			map3(coeff);
+			double quantizedCoeff = quantize(coeff, Q2);
 			map4(quantizedCoeff);
-			double dequantizedCoeff = lround(quantizedCoeff * Q2);
-			double diff = coeff - dequantizedCoeff;
+			double dequantizedCoeff = dequantize(quantizedCoeff, Q2);
 			coeff = dequantizedCoeff;
 		}
-		//antiTransformedWindows[windowsCount] = mdct.antiTransform(window);
-		mdct.antiTransform(window, antiTransformedWindows[windowsCount]);
+		mdct.antiTransform(window.begin(), window.end(), antiTransformedWindows[windowsCount]);
 		windowsCount++;
 	}
 	cout << "I coefficienti sono " << antiTransformedWindows.size() << " vettori da " << antiTransformedWindows[0].size() << " elementi\n";
 	
-	/*entropia = map3.entropy2();
-	cout << "Entropia dei coefficienti: " << entropia << "\n";*/
+	entropia = map3.entropy2();
+	cout << "Entropia dei coefficienti: " << entropia << "\n";
 	entropia = map4.entropy2();
 	cout << "Entropia dei coefficienti quantizzati: " << entropia << "\n";
 
@@ -140,17 +108,12 @@ int main(int argc, char** argv) {
 	vector<int16_t> outSignal(rawData.size(), 0);
 	cout << "Il vettore di output è lungo " << outSignal.size()<<"\n";
 	windowsCount = 0;
-	/*vector<vector<int16_t>> sub(&antiTransformedWindows[0], &antiTransformedWindows[200]);
-	for(vector<int16_t> window : sub){*/
-	for(vector<int16_t> window : antiTransformedWindows) {
-		//cout << "Finestra numero " << windowsCount << "\n";
+	for(vector<int16_t>& window : antiTransformedWindows) {
 		uint32_t n = windowsCount * (N / 2);
-		//cout << "n0 = " << n << "	";
 		cont = 0;
 		while (n < (windowsCount * N / 2 + window.size())) {
 			outSignal[n++] += window[cont++];
 		}
-		//cout << "n finale = " << n << "\n";
 		windowsCount++;
 	}
 
